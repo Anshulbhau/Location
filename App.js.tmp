@@ -1,0 +1,312 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  Alert,
+  ScrollView,
+  ActivityIndicator,
+} from 'react-native';
+import * as Location from 'expo-location';
+import { StatusBar } from 'expo-status-bar';
+import { insertLocationData } from './constants/supabaseConfig';
+import { calculateDistance, calculateSpeed } from './utils/haversine';
+
+// Hardcoded vehicle ID for demo
+const VEHICLE_ID = 'vehicle-demo-001-' + Math.random().toString(36).substring(7);
+
+export default function App() {
+  const [isTracking, setIsTracking] = useState(false);
+  const [previousLocation, setPreviousLocation] = useState(null);
+  const [latitude, setLatitude] = useState('--');
+  const [longitude, setLongitude] = useState('--');
+  const [speed, setSpeed] = useState('0.00');
+  const [status, setStatus] = useState('Stopped');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [isPermissionGranted, setIsPermissionGranted] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [totalUpdates, setTotalUpdates] = useState(0);
+  const [lastSentCoords, setLastSentCoords] = useState(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState(null);
+
+  const locationIntervalRef = useRef(null);
+
+  // Request location permission on app startup
+  useEffect(() => {
+    requestLocationPermission();
+    return () => {
+      if (locationIntervalRef.current) {
+        clearInterval(locationIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const requestLocationPermission = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        setIsPermissionGranted(true);
+        setErrorMessage('');
+        console.log('✅ Location permission granted');
+      } else {
+        setIsPermissionGranted(false);
+        setErrorMessage('❌ Location permission denied. Cannot track GPS.');
+        console.log('❌ Location permission denied');
+      }
+    } catch (error) {
+      console.error('Error requesting permission:', error);
+      setErrorMessage('Error requesting location permission');
+    }
+  };
+
+  const startTracking = async () => {
+    if (!isPermissionGranted) {
+      Alert.alert('Permission Required', 'Please grant location permission to start tracking');
+      return;
+    }
+
+    setIsLoading(true);
+    setTotalUpdates(0);
+    setLastSentCoords(null);
+    setPreviousLocation(null);
+    setLastUpdateTime(null);
+
+    try {
+      // Get initial location
+      const currentPosition = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.BestForNavigation,
+      });
+      setPreviousLocation(currentPosition);
+      setLastUpdateTime(Date.now());
+
+      setIsTracking(true);
+      setStatus('Sending');
+      setIsLoading(false);
+
+      // Start location tracking every 2.5 seconds
+      startLocationTracking();
+    } catch (error) {
+      console.error('Error starting tracking:', error);
+      setErrorMessage('Cannot get GPS location. Ensure GPS is enabled.');
+      setIsLoading(false);
+    }
+  };
+
+  const startLocationTracking = () => {
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current);
+    }
+
+    // Track location every 2.5 seconds
+    locationIntervalRef.current = setInterval(async () => {
+      if (isTracking) {
+        await updateLocation();
+      }
+    }, 2500);
+  };
+
+  const updateLocation = async () => {
+    try {
+      // Get real GPS location
+      const newLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.BestForNavigation,
+      });
+
+      const newLat = newLocation.coords.latitude;
+      const newLon = newLocation.coords.longitude;
+      const currentTime = Date.now();
+
+      // Check for duplicate coordinates
+      if (lastSentCoords) {
+        if (
+          lastSentCoords.latitude === newLat &&
+          lastSentCoords.longitude === newLon
+        ) {
+          console.log('Duplicate location, skipping...');
+          return;
+        }
+      }
+
+      // Calculate speed based on distance and time
+      let calculatedSpeed = 0;
+      
+      if (previousLocation && lastUpdateTime) {
+        const oldLat = previousLocation.coords.latitude;
+        const oldLon = previousLocation.coords.longitude;
+        
+        // Distance in km
+        const distanceKm = calculateDistance(oldLat, oldLon, newLat, newLon);
+        
+        // Time in seconds
+        const timeSeconds = (currentTime - lastUpdateTime) / 1000;
+        
+        // Speed in km/h
+        if (timeSeconds > 0) {
+          calculatedSpeed = calculateSpeed(distanceKm, timeSeconds);
+        }
+
+        console.log(`📍 Distance: ${distanceKm.toFixed(4)} km, Time: ${timeSeconds.toFixed(1)}s, Speed: ${calculatedSpeed.toFixed(2)} km/h`);
+      }
+
+      // Update state with new location
+      setPreviousLocation(newLocation);
+      setLastUpdateTime(currentTime);
+      setLatitude(newLat.toFixed(6));
+      setLongitude(newLon.toFixed(6));
+      setSpeed(calculatedSpeed.toFixed(2));
+      setLastSentCoords({ latitude: newLat, longitude: newLon });
+
+      // Send to Supabase
+      const result = await insertLocationData(VEHICLE_ID, newLat, newLon, calculatedSpeed);
+
+      if (result.success) {
+        setTotalUpdates((prev) => prev + 1);
+        console.log(`✅ Update ${totalUpdates + 1} sent to Supabase`);
+      } else {
+        setErrorMessage('Failed to send location to server');
+        console.error('❌ Supabase error:', result.error);
+      }
+    } catch (error) {
+      console.error('Error updating location:', error);
+      setErrorMessage('Error getting GPS location');
+    }
+  };
+
+  const stopTracking = () => {
+    setIsTracking(false);
+    setStatus('Stopped');
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current);
+    }
+    setLatitude('--');
+    setLongitude('--');
+    setSpeed('0.00');
+    console.log('🛑 Tracking stopped');
+  };
+
+  const copyToClipboard = (text) => {
+    Alert.alert('Info', text);
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>GPS Tracker</Text>
+          <Text style={styles.vehicleId}>Vehicle ID: {VEHICLE_ID.substring(0, 12)}...</Text>
+        </View>
+
+        {/* Permission Status */}
+        <View style={[styles.permissionContainer, { backgroundColor: isPermissionGranted ? '#dcfce7' : '#fee2e2' }]}>
+          <Text style={[styles.permissionText, { color: isPermissionGranted ? '#166534' : '#991b1b' }]}>
+            {isPermissionGranted ? '✅ GPS Permission: Granted' : '❌ GPS Permission: Denied'}
+          </Text>
+        </View>
+
+        {/* Error Message */}
+        {errorMessage ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        ) : null}
+
+        {/* Status Display */}
+        <View style={styles.statusContainer}>
+          <View
+            style={[
+              styles.statusDot,
+              { backgroundColor: status === 'Sending' ? '#22c55e' : '#ef4444' },
+            ]}
+          />
+          <Text style={styles.statusText}>Status: {status}</Text>
+        </View>
+
+        {/* Location Data Display */}
+        <View style={styles.dataContainer}>
+          <TouchableOpacity
+            style={styles.dataBox}
+            onPress={() => copyToClipboard(`Latitude: ${latitude}`)}
+          >
+            <Text style={styles.dataLabel}>Latitude</Text>
+            <Text style={styles.dataValue}>{latitude}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.dataBox}
+            onPress={() => copyToClipboard(`Longitude: ${longitude}`)}
+          >
+            <Text style={styles.dataLabel}>Longitude</Text>
+            <Text style={styles.dataValue}>{longitude}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.dataBox}
+            onPress={() => copyToClipboard(`Speed: ${speed} km/h`)}
+          >
+            <Text style={styles.dataLabel}>Speed (km/h)</Text>
+            <Text style={styles.dataValue}>{speed}</Text>
+          </TouchableOpacity>
+
+          <View style={styles.dataBox}>
+            <Text style={styles.dataLabel}>Updates Sent</Text>
+            <Text style={styles.dataValue}>{totalUpdates}</Text>
+          </View>
+        </View>
+
+        {/* Buttons */}
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={[styles.button, styles.startButton, isTracking && styles.buttonDisabled]}
+            onPress={startTracking}
+            disabled={isTracking || isLoading || !isPermissionGranted}
+          >
+            {isLoading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <Text style={styles.buttonText}>
+                {isTracking ? 'Trip In Progress' : 'Start Trip'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.button, styles.stopButton, !isTracking && styles.buttonDisabled]}
+            onPress={stopTracking}
+            disabled={!isTracking}
+          >
+            <Text style={styles.buttonText}>Stop Trip</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Info */}
+        <View style={styles.infoContainer}>
+          <Text style={styles.infoTitle}>How it works:</Text>
+          <Text style={styles.infoText}>
+            • Ensure GPS is enabled on your device{'\n'}
+            • Tap "Start Trip" to begin tracking{'\n'}
+            • Location updates are sent every 2.5 seconds{'\n'}
+            • Speed calculated from distance & time{'\n'}
+            • Duplicate coordinates are skipped{'\n'}
+            • Open terminal for detailed logs
+          </Text>
+        </View>
+
+        {/* Debug Info */}
+        <View style={styles.debugContainer}>
+          <Text style={styles.debugLabel}>
+            Permission: {isPermissionGranted ? 'Granted' : 'Denied'}
+          </Text>
+          <Text style={styles.debugLabel}>
+            Mode: {isPermissionGranted ? 'Real GPS Only' : 'Unavailable'}
+          </Text>
+          <Text style={styles.debugLabel}>
+            Last Update: {lastUpdateTime ? new Date(lastUpdateTime).toLocaleTimeString() : 'None'}
+          </Text>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
