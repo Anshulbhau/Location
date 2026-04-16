@@ -147,19 +147,21 @@ export const fetchRouteStops = async (routeId) => {
   }
 };
 
-// Create a mock trip to ensure database consistency during testing
-export const createMockTrip = async (vehicleId, routeId) => {
+// Start a new trip
+export const startTrip = async (vehicleId, routeId, direction) => {
   try {
-    // 1. Get a driver (any driver for mock purposes)
-    const { data: drivers } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('role', 'driver')
-      .limit(1);
+    // 1. Get the driver assigned to the selected vehicle
+    const { data: vehicleData } = await supabase
+      .from('vehicles')
+      .select('driver_id')
+      .eq('id', vehicleId)
+      .single();
     
-    if (!drivers || drivers.length === 0) {
-      throw new Error('No drivers found in profiles table. Create one in Admin first.');
+    if (!vehicleData || !vehicleData.driver_id) {
+      throw new Error('No driver assigned to this vehicle. Please assign a driver in the Admin portal.');
     }
+
+    const driverId = vehicleData.driver_id;
 
     // 2. Insert trip
     const { data, error } = await supabase
@@ -168,8 +170,9 @@ export const createMockTrip = async (vehicleId, routeId) => {
         {
           vehicle_id: vehicleId,
           route_id: routeId,
-          driver_id: drivers[0].id,
-          status: 'ongoing',
+          driver_id: driverId,
+          status: 'running',
+          direction: direction || 'onward',
           start_time: new Date().toISOString()
         }
       ])
@@ -179,7 +182,28 @@ export const createMockTrip = async (vehicleId, routeId) => {
     if (error) throw error;
     return { success: true, data };
   } catch (err) {
-    console.error('Error creating mock trip:', err);
+    console.error('Error starting trip:', err);
+    return { success: false, error: err };
+  }
+};
+
+// End an ongoing trip
+export const endTrip = async (tripId) => {
+  try {
+    const { data, error } = await supabase
+      .from('trips')
+      .update({
+        status: 'completed',
+        end_time: new Date().toISOString()
+      })
+      .eq('id', tripId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return { success: true, data };
+  } catch (err) {
+    console.error('Error ending trip:', err);
     return { success: false, error: err };
   }
 };

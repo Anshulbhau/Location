@@ -16,7 +16,9 @@ import {
   fetchVehicles, 
   fetchRoutes, 
   fetchRouteStops, 
-  insertLocationData 
+  insertLocationData,
+  startTrip,
+  endTrip
 } from './constants/supabaseConfig';
 import { RouteSimulator } from './services/simulationService';
 import { requestLocationPermission, startRealTimeTracking } from './services/locationService';
@@ -38,6 +40,8 @@ export default function App() {
   const [routes, setRoutes] = useState([]);
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [selectedRoute, setSelectedRoute] = useState(null);
+  const [direction, setDirection] = useState('onward');
+  const [currentTripId, setCurrentTripId] = useState(null);
   
   // Tracking Configuration
   const [trackingMode, setTrackingMode] = useState('gps'); // 'gps' | 'simulation'
@@ -104,6 +108,14 @@ export default function App() {
 
     setIsLoading(true);
     try {
+      // 1. Create trip in database
+      const tripRes = await startTrip(selectedVehicle.id, selectedRoute.id, direction);
+      if (!tripRes.success) {
+        throw new Error('Failed to create trip in database.');
+      }
+      setCurrentTripId(tripRes.data.id);
+
+      // 2. Prepare simulator if needed
       if (trackingMode === 'simulation') {
         const stopsRes = await fetchRouteStops(selectedRoute.id);
         if (stopsRes.success && stopsRes.data.length > 1) {
@@ -190,8 +202,14 @@ export default function App() {
     }
   };
 
-  const exitDriving = () => {
+  const exitDriving = async () => {
     stopAllTracking();
+
+    if (currentTripId) {
+      await endTrip(currentTripId);
+      setCurrentTripId(null);
+    }
+
     setAppMode('setup');
     setTotalUpdates(0);
     lastUpdateRef.current = null;
@@ -249,6 +267,25 @@ export default function App() {
             </Text>
           </TouchableOpacity>
         ))}
+      </View>
+
+      <Text style={styles.sectionTitle}>Direction</Text>
+      <View style={styles.modeContainer}>
+        <View style={styles.toggleRow}>
+          <Text style={[styles.modeLabel, direction === 'onward' && styles.activeMode]}>ONWARD</Text>
+          <Switch
+            value={direction === 'return'}
+            onValueChange={(val) => setDirection(val ? 'return' : 'onward')}
+            trackColor={{ false: '#cbd5e1', true: '#1e40af' }}
+            thumbColor="white"
+          />
+          <Text style={[styles.modeLabel, direction === 'return' && styles.activeMode]}>RETURN</Text>
+        </View>
+        <Text style={styles.modeInfo}>
+          {direction === 'onward' 
+            ? "From start location to end location" 
+            : "From end location to start location"}
+        </Text>
       </View>
 
       <ErrorMessage message={errorMessage} />
