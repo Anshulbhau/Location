@@ -12,19 +12,26 @@
     "ios": {
       "supportsTabletMode": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "This app needs your location to track the vehicle"
+        "NSLocationWhenInUseUsageDescription": "This app needs your location to track the vehicle",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs background location to continue tracking the vehicle while the app is minimized.",
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
       "package": "com.anonymous.gpstrackingapp"
     },
@@ -33,9 +40,15 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermissions": "Allow $(PRODUCT_NAME) to use your location."
+          "locationAlwaysAndWhenInUsePermissions": "Allow $(PRODUCT_NAME) to use your location.",
+          "isAndroidBackgroundLocationEnabled": true
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1dcc90f0-4a2c-4930-85b7-be4728cd8181"
+      }
+    }
   }
 }

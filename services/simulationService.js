@@ -43,7 +43,11 @@ export class RouteSimulator {
     if (this.polyline.length < 2) return;
 
     this.isRunning = true;
-    this.timer = setInterval(() => this.tick(), this.updateInterval / this.speedFactor);
+    
+    // Decouple interval from speed factor to send updates much faster.
+    // Minimum 100ms interval to prevent overwhelming the database.
+    this.currentIntervalDelay = Math.max(100, 2000 / this.speedFactor);
+    this.timer = setInterval(() => this.tick(), this.currentIntervalDelay);
   }
 
   stop() {
@@ -61,6 +65,18 @@ export class RouteSimulator {
       this.stop();
       this.start();
     }
+  }
+
+  /**
+   * Immediately finishes the simulation by jumping to the end of the route.
+   */
+  endTrip() {
+    if (this.polyline.length > 0) {
+      this.currentPolylineIndex = this.polyline.length - 1;
+      this.currentDistanceOnSegment = 0;
+      this.emitCurrentLocation(0); // Emit final location with 0 speed
+    }
+    this.stop();
   }
 
   /**
@@ -151,7 +167,11 @@ export class RouteSimulator {
     }
 
     // 2. Convert speed to distance to advance (in km)
-    const timeHours = (this.updateInterval / 1000) / 3600;
+    // The simulated time passed is real time (currentIntervalDelay) * speedFactor
+    // Fallback to updateInterval / speedFactor if currentIntervalDelay isn't set
+    const interval = this.currentIntervalDelay || (this.updateInterval / this.speedFactor);
+    const simulatedTimeMs = interval * this.speedFactor;
+    const timeHours = (simulatedTimeMs / 1000) / 3600;
     const distanceToMove = currentSpeedKmh * timeHours;
 
     // 3. Move exactly `distanceToMove` along the polyline segments

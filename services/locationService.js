@@ -1,11 +1,50 @@
 import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DeviceEventEmitter } from 'react-native';
 import { insertLocationData } from '../constants/supabaseConfig';
 import { calculateDistance, calculateSpeed } from '../utils/haversine';
 
+export const BACKGROUND_LOCATION_TASK = 'background-location-task';
+
+TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
+  if (error) {
+    console.error('Background Location Error:', error);
+    return;
+  }
+  if (data) {
+    const { locations } = data;
+    const location = locations[0];
+
+    try {
+      const vehicleId = await AsyncStorage.getItem('tracking_vehicle_id');
+      
+      if (vehicleId) {
+        // Calculate speed directly from OS (if available) or default to 0
+        const speed = location.coords.speed && location.coords.speed >= 0 ? location.coords.speed * 3.6 : 0;
+        
+        // Push directly to DB so it works even if the app UI is killed
+        await insertLocationData(vehicleId, location.coords.latitude, location.coords.longitude, speed);
+      }
+
+      // Emit to the foreground app to update UI (if it's running)
+      DeviceEventEmitter.emit('onLocationUpdate', location);
+    } catch (e) {
+      console.error('Background Task Error:', e);
+    }
+  }
+});
+
 export const requestLocationPermission = async () => {
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    return status === 'granted';
+    const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+    if (fgStatus !== 'granted') return false;
+
+    const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+    if (bgStatus !== 'granted') {
+       console.log('Background permission not granted, app will only track in foreground');
+    }
+    return true; 
   } catch (error) {
     console.error('Error requesting permission:', error);
     return false;
@@ -54,16 +93,32 @@ export const sendLocationToSupabase = async (vehicleId, latitude, longitude, spe
   }
 };
 
-export const startRealTimeTracking = async (callback, intervalMs = 5000) => {
+export const startRealTimeTracking = async (intervalMs = 5000) => {
   const hasPermission = await requestLocationPermission();
   if (!hasPermission) return null;
 
-  return await Location.watchPositionAsync(
-    {
-      accuracy: Location.Accuracy.BestForNavigation,
-      timeInterval: intervalMs,
-      distanceInterval: 1, // Minimum change of 1 meter to trigger
+  await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
+    accuracy: Location.Accuracy.BestForNavigation,
+    timeInterval: intervalMs,
+    distanceInterval: 2, // Minimum change of 2 meters to trigger (acts as a native drift filter)
+    foregroundService: {
+      notificationTitle: "GPS Tracking Active",
+      notificationBody: "Monitoring vehicle location in the background",
+      notificationColor: "#1e40af",
     },
-    callback
-  );
+    showsBackgroundLocationIndicator: true,
+  });
+  
+  return true; // We don't return a watch subscription anymore
+};
+
+export const stopRealTimeTracking = async () => {
+  try {
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+    if (hasStarted) {
+      await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+    }
+  } catch (error) {
+    console.error('Error stopping background tracking:', error);
+  }
 };

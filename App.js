@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { StatusBar } from 'expo-status-bar';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Services & Config
 import { 
@@ -21,8 +22,9 @@ import {
   endTrip
 } from './constants/supabaseConfig';
 import { RouteSimulator } from './services/simulationService';
-import { requestLocationPermission, startRealTimeTracking } from './services/locationService';
+import { requestLocationPermission, startRealTimeTracking, stopRealTimeTracking } from './services/locationService';
 import { calculateDistance } from './utils/haversine';
+import { DeviceEventEmitter } from 'react-native';
 
 // Components
 import { ControlButtons } from './components/ControlButtons';
@@ -65,7 +67,18 @@ export default function App() {
 
   useEffect(() => {
     initializeData();
-    return () => stopAllTracking();
+    
+    // Listen for background updates when app is open
+    const subscription = DeviceEventEmitter.addListener('onLocationUpdate', (location) => {
+      if (trackingMode === 'gps') {
+        processLocationUpdate(location, true);
+      }
+    });
+
+    return () => {
+      stopAllTracking();
+      subscription.remove();
+    };
   }, []);
 
   const initializeData = async () => {
@@ -96,10 +109,7 @@ export default function App() {
 
   const stopAllTracking = () => {
     simulatorRef.current?.stop();
-    if (gpsSubscriptionRef.current) {
-      gpsSubscriptionRef.current.remove();
-      gpsSubscriptionRef.current = null;
-    }
+    stopRealTimeTracking();
     setIsTracking(false);
   };
 
@@ -114,6 +124,9 @@ export default function App() {
         throw new Error('Failed to create trip in database.');
       }
       setCurrentTripId(tripRes.data.id);
+      
+      // Save vehicle ID so background task knows which vehicle is moving
+      await AsyncStorage.setItem('tracking_vehicle_id', selectedVehicle.id);
 
       // 2. Prepare simulator if needed
       if (trackingMode === 'simulation') {
@@ -140,7 +153,7 @@ export default function App() {
    * Universal location update entry point
    * Handles noise filtering, speed calculation, and DB sync
    */
-  const processLocationUpdate = async (location) => {
+  const processLocationUpdate = async (location, isFromBackground = false) => {
     const { latitude, longitude, speed: rawSpeed } = location.coords || location;
     const now = Date.now();
     
@@ -179,13 +192,18 @@ export default function App() {
     lastUpdateRef.current = { latitude, longitude, timestamp: now };
 
     // --- DATABASE SYNC ---
-    try {
-      const res = await insertLocationData(selectedVehicle.id, latitude, longitude, currentSpeed);
-      if (res.success) {
-        setTotalUpdates(prev => prev + 1);
+    if (trackingMode === 'simulation' || !isFromBackground) {
+      try {
+        const res = await insertLocationData(selectedVehicle.id, latitude, longitude, currentSpeed);
+        if (res.success) {
+          setTotalUpdates(prev => prev + 1);
+        }
+      } catch (e) {
+        console.error('Sync Error:', e);
       }
-    } catch (e) {
-      console.error('Sync Error:', e);
+    } else {
+      // Background task already synced to DB, just increment UI counter
+      setTotalUpdates(prev => prev + 1);
     }
   };
 
@@ -195,7 +213,7 @@ export default function App() {
     } else {
       setIsTracking(true);
       if (trackingMode === 'gps') {
-        gpsSubscriptionRef.current = await startRealTimeTracking(processLocationUpdate, UPDATE_INTERVAL);
+        await startRealTimeTracking(UPDATE_INTERVAL);
       } else {
         simulatorRef.current?.start();
       }
@@ -209,6 +227,8 @@ export default function App() {
       await endTrip(currentTripId);
       setCurrentTripId(null);
     }
+    
+    await AsyncStorage.removeItem('tracking_vehicle_id');
 
     setAppMode('setup');
     setTotalUpdates(0);
@@ -329,7 +349,7 @@ export default function App() {
           <Slider
             style={{ width: '100%', height: 40 }}
             minimumValue={1}
-            maximumValue={10}
+            maximumValue={50}
             step={1}
             value={speedFactor}
             onValueChange={(val) => {
@@ -340,6 +360,12 @@ export default function App() {
             maximumTrackTintColor="#cbd5e1"
             thumbTintColor="#1e40af"
           />
+          <TouchableOpacity 
+            style={{ backgroundColor: '#10b981', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 15 }}
+            onPress={() => simulatorRef.current?.endTrip()}
+          >
+            <Text style={{ color: 'white', fontWeight: 'bold' }}>JUMP TO END OF TRIP</Text>
+          </TouchableOpacity>
         </View>
       )}
 
