@@ -114,6 +114,22 @@ export const startRealTimeTracking = async (intervalMs = 5000) => {
     showsBackgroundLocationIndicator: true,
   });
   
+  // Get initial location immediately so UI doesn't have to wait for the first interval
+  try {
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    if (loc) {
+      DeviceEventEmitter.emit('onLocationUpdate', loc);
+      
+      const vehicleId = await AsyncStorage.getItem('tracking_vehicle_id');
+      if (vehicleId) {
+        const speed = loc.coords.speed && loc.coords.speed >= 0 ? loc.coords.speed * 3.6 : 0;
+        await insertLocationData(vehicleId, loc.coords.latitude, loc.coords.longitude, speed);
+      }
+    }
+  } catch (err) {
+    console.log("Error fetching immediate location:", err);
+  }
+
   return true; // We don't return a watch subscription anymore
 };
 

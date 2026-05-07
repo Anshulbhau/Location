@@ -126,7 +126,7 @@ export default function App() {
       setCurrentTripId(tripRes.data.id);
       
       // Save vehicle ID so background task knows which vehicle is moving
-      await AsyncStorage.setItem('tracking_vehicle_id', selectedVehicle.id);
+      await AsyncStorage.setItem('tracking_vehicle_id', selectedVehicle.id.toString());
 
       // 2. Prepare simulator if needed
       if (trackingMode === 'simulation') {
