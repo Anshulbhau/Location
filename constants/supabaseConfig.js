@@ -74,7 +74,7 @@ export const insertLocationData = async (vehicleId, latitude, longitude, speed) 
   try {
     const { data, error } = await supabase
       .from('vehicle_locations')
-      .insert([
+      .upsert([
         {
           vehicle_id: vehicleId,
           latitude: latitude,
@@ -82,7 +82,7 @@ export const insertLocationData = async (vehicleId, latitude, longitude, speed) 
           speed: speed,
           recorded_at: new Date().toISOString(),
         },
-      ]);
+      ], { onConflict: 'vehicle_id' });
 
     if (error) {
       console.error('Error inserting location:', error);
@@ -111,41 +111,6 @@ export const fetchRoutes = async () => {
   }
 };
 
-// Fetch stops for a specific route in order
-export const fetchRouteStops = async (routeId) => {
-  try {
-    const { data, error } = await supabase
-      .from('route_stops')
-      .select(`
-        stop_id,
-        stop_order,
-        stops (
-          id,
-          stop_name,
-          latitude,
-          longitude
-        )
-      `)
-      .eq('route_id', routeId)
-      .order('stop_order', { ascending: true });
-    
-    if (error) throw error;
-    
-    // Flatten the nested stops data
-    const formattedStops = data.map(item => ({
-      id: item.stops.id,
-      name: item.stops.stop_name,
-      latitude: item.stops.latitude,
-      longitude: item.stops.longitude,
-      order: item.stop_order
-    }));
-
-    return { success: true, data: formattedStops };
-  } catch (err) {
-    console.error('Error fetching route stops:', err);
-    return { success: false, error: err };
-  }
-};
 
 // Start a new trip
 export const startTrip = async (vehicleId, routeId, direction) => {

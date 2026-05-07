@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Switch,
 } from 'react-native';
-import Slider from '@react-native-community/slider';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -16,12 +15,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { 
   fetchVehicles, 
   fetchRoutes, 
-  fetchRouteStops, 
   insertLocationData,
   startTrip,
   endTrip
 } from './constants/supabaseConfig';
-import { RouteSimulator } from './services/simulationService';
 import { requestLocationPermission, startRealTimeTracking, stopRealTimeTracking } from './services/locationService';
 import { calculateDistance } from './utils/haversine';
 import { DeviceEventEmitter } from 'react-native';
@@ -46,7 +43,6 @@ export default function App() {
   const [currentTripId, setCurrentTripId] = useState(null);
   
   // Tracking Configuration
-  const [trackingMode, setTrackingMode] = useState('gps'); // 'gps' | 'simulation'
   const UPDATE_INTERVAL = 5000;
   
   // Driving State
@@ -57,11 +53,8 @@ export default function App() {
     speed: '0.00' 
   });
   const [totalUpdates, setTotalUpdates] = useState(0);
-  const [speedFactor, setSpeedFactor] = useState(1);
-  const [permissionGranted, setPermissionGranted] = useState(false);
 
   // Refs for tracking state
-  const simulatorRef = useRef(null);
   const gpsSubscriptionRef = useRef(null);
   const lastUpdateRef = useRef(null); // { latitude, longitude, timestamp }
 
@@ -70,9 +63,7 @@ export default function App() {
     
     // Listen for background updates when app is open
     const subscription = DeviceEventEmitter.addListener('onLocationUpdate', (location) => {
-      if (trackingMode === 'gps') {
-        processLocationUpdate(location, true);
-      }
+      processLocationUpdate(location, true);
     });
 
     return () => {
@@ -85,8 +76,7 @@ export default function App() {
     setIsLoading(true);
     setErrorMessage('');
     try {
-      const hasPermission = await requestLocationPermission();
-      setPermissionGranted(hasPermission);
+      await requestLocationPermission();
 
       const [vRes, rRes] = await Promise.all([
         fetchVehicles(),
@@ -108,7 +98,6 @@ export default function App() {
   };
 
   const stopAllTracking = () => {
-    simulatorRef.current?.stop();
     stopRealTimeTracking();
     setIsTracking(false);
   };
@@ -128,19 +117,6 @@ export default function App() {
       // Save vehicle ID so background task knows which vehicle is moving
       await AsyncStorage.setItem('tracking_vehicle_id', selectedVehicle.id.toString());
 
-      // 2. Prepare simulator if needed
-      if (trackingMode === 'simulation') {
-        const stopsRes = await fetchRouteStops(selectedRoute.id);
-        if (stopsRes.success && stopsRes.data.length > 1) {
-          simulatorRef.current = new RouteSimulator(
-            stopsRes.data,
-            (update) => processLocationUpdate(update),
-            { speedFactor, updateInterval: UPDATE_INTERVAL }
-          );
-        } else {
-          throw new Error('This route has no stops defined.');
-        }
-      }
       setAppMode('driving');
     } catch (e) {
       setErrorMessage(e.message || 'Error starting trip.');
@@ -169,15 +145,10 @@ export default function App() {
       );
       
       // If movement is less than 2 meters (0.002km), treat as stationary (GPS Drift Filter)
-      if (distKm < 0.002 && trackingMode === 'gps') {
+      if (distKm < 0.002) {
         currentSpeed = 0;
-        // Don't update coordinate display if stationary to avoid "jitter"
-        setCurrentLocation(prev => ({ ...prev, speed: '0.00' }));
-        return; 
-      }
-
-      // If speed wasn't provided directly (some simulators), calculate it
-      if (!rawSpeed && rawSpeed !== 0) {
+      } else if (!rawSpeed && rawSpeed !== 0) {
+        // If speed wasn't provided directly (some simulators), calculate it
         const timeSec = (now - lastUpdateRef.current.timestamp) / 1000;
         currentSpeed = (distKm / timeSec) * 3600;
       }
@@ -192,7 +163,7 @@ export default function App() {
     lastUpdateRef.current = { latitude, longitude, timestamp: now };
 
     // --- DATABASE SYNC ---
-    if (trackingMode === 'simulation' || !isFromBackground) {
+    if (!isFromBackground) {
       try {
         const res = await insertLocationData(selectedVehicle.id, latitude, longitude, currentSpeed);
         if (res.success) {
@@ -211,12 +182,14 @@ export default function App() {
     if (isTracking) {
       stopAllTracking();
     } else {
-      setIsTracking(true);
-      if (trackingMode === 'gps') {
-        await startRealTimeTracking(UPDATE_INTERVAL);
-      } else {
-        simulatorRef.current?.start();
+      const hasPerm = await requestLocationPermission();
+      if (!hasPerm) {
+        setErrorMessage('Location permissions are required to track trips.');
+        return;
       }
+      setErrorMessage('');
+      setIsTracking(true);
+      await startRealTimeTracking(UPDATE_INTERVAL);
     }
   };
 
@@ -240,25 +213,6 @@ export default function App() {
 
   const renderSetup = () => (
     <ScrollView contentContainerStyle={styles.scrollContent}>
-      <View style={styles.modeContainer}>
-        <Text style={styles.sectionTitle}>Tracking Mode</Text>
-        <View style={styles.toggleRow}>
-          <Text style={[styles.modeLabel, trackingMode === 'gps' && styles.activeMode]}>REAL GPS</Text>
-          <Switch
-            value={trackingMode === 'simulation'}
-            onValueChange={(val) => setTrackingMode(val ? 'simulation' : 'gps')}
-            trackColor={{ false: '#cbd5e1', true: '#1e40af' }}
-            thumbColor="white"
-          />
-          <Text style={[styles.modeLabel, trackingMode === 'simulation' && styles.activeMode]}>SIMULATION</Text>
-        </View>
-        <Text style={styles.modeInfo}>
-          {trackingMode === 'gps' 
-            ? "Uses your phone's actual location with drift filtering." 
-            : "Follows a database route (good for room testing)."}
-        </Text>
-      </View>
-
       <Text style={styles.sectionTitle}>Select Vehicle</Text>
       <View style={styles.listContainer}>
         {vehicles.map(v => (
@@ -324,7 +278,7 @@ export default function App() {
     <ScrollView contentContainerStyle={styles.drivingScrollContent}>
       <View style={styles.modeIndicator}>
         <Text style={styles.modeIndicatorText}>
-          MODE: {trackingMode === 'gps' ? '🛰️ REAL GPS' : '🤖 SIMULATION'}
+          MODE: 🛰️ REAL GPS
         </Text>
       </View>
       
@@ -343,36 +297,10 @@ export default function App() {
         updates={totalUpdates}
       />
 
-      {trackingMode === 'simulation' && (
-        <View style={styles.sliderContainer}>
-          <Text style={styles.sliderLabel}>Simulation Speed: {speedFactor}x</Text>
-          <Slider
-            style={{ width: '100%', height: 40 }}
-            minimumValue={1}
-            maximumValue={50}
-            step={1}
-            value={speedFactor}
-            onValueChange={(val) => {
-              setSpeedFactor(val);
-              simulatorRef.current?.setSpeed(val);
-            }}
-            minimumTrackTintColor="#1e40af"
-            maximumTrackTintColor="#cbd5e1"
-            thumbTintColor="#1e40af"
-          />
-          <TouchableOpacity 
-            style={{ backgroundColor: '#10b981', padding: 12, borderRadius: 8, alignItems: 'center', marginTop: 15 }}
-            onPress={() => simulatorRef.current?.endTrip()}
-          >
-            <Text style={{ color: 'white', fontWeight: 'bold' }}>JUMP TO END OF TRIP</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       <ControlButtons 
         isTracking={isTracking}
         isLoading={false}
-        isPermissionGranted={trackingMode === 'simulation' || permissionGranted}
+        isPermissionGranted={true}
         onStart={toggleTracking}
         onStop={toggleTracking}
       />
@@ -423,8 +351,6 @@ const styles = StyleSheet.create({
   speedLabel: { fontSize: 11, color: '#94a3b8', fontWeight: 'bold', marginBottom: 8 },
   speedValue: { fontSize: 72, fontWeight: '900', color: '#1e40af' },
   speedUnit: { fontSize: 16, color: '#64748b', fontWeight: 'bold' },
-  sliderContainer: { backgroundColor: 'white', padding: 20, borderRadius: 16, marginTop: 20 },
-  sliderLabel: { fontSize: 14, color: '#444', marginBottom: 10, fontWeight: '600' },
   exitButton: { padding: 15, alignItems: 'center', marginTop: 20 },
   exitButtonText: { color: '#dc2626', fontWeight: 'bold', fontSize: 14 },
 });

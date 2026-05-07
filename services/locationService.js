@@ -1,11 +1,13 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { DeviceEventEmitter } from 'react-native';
+import { DeviceEventEmitter, Alert, Linking } from 'react-native';
 import { insertLocationData } from '../constants/supabaseConfig';
 import { calculateDistance, calculateSpeed } from '../utils/haversine';
 
 export const BACKGROUND_LOCATION_TASK = 'background-location-task';
+
+let lastDbSyncTime = 0;
 
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) {
@@ -13,6 +15,12 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     return;
   }
   if (data) {
+    const now = Date.now();
+    if (now - lastDbSyncTime < 4500) { // Keep at least ~5 seconds between updates
+      return;
+    }
+    lastDbSyncTime = now;
+
     const { locations } = data;
     const location = locations[0];
 
@@ -37,8 +45,23 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
 
 export const requestLocationPermission = async () => {
   try {
-    const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
-    if (fgStatus !== 'granted') return false;
+    const { status: fgStatus, canAskAgain } = await Location.requestForegroundPermissionsAsync();
+    
+    if (fgStatus !== 'granted') {
+      if (!canAskAgain) {
+        Alert.alert(
+          "Permission Required",
+          "Location permission is required to track trips. Please enable it in your device Settings.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() }
+          ]
+        );
+      } else {
+        Alert.alert("Permission Required", "Please grant location access to track trips.");
+      }
+      return false;
+    }
 
     try {
       const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
@@ -105,7 +128,7 @@ export const startRealTimeTracking = async (intervalMs = 5000) => {
   await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
     accuracy: Location.Accuracy.BestForNavigation,
     timeInterval: intervalMs,
-    distanceInterval: 2, // Minimum change of 2 meters to trigger (acts as a native drift filter)
+    distanceInterval: 0, // Set to 0 to force updates based on time, rather than waiting for movement
     foregroundService: {
       notificationTitle: "GPS Tracking Active",
       notificationBody: "Monitoring vehicle location in the background",
