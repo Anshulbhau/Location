@@ -11,7 +11,11 @@ export const ControlButtons = ({
   return (
     <View style={styles.container}>
       <TouchableOpacity
-        style={[styles.button, styles.startButton, isTracking && styles.buttonDisabled]}
+        style={[
+          styles.button, 
+          styles.startButton, 
+          (isTracking || isLoading || !isPermissionGranted) && styles.buttonDisabled
+        ]}
         onPress={onStart}
         disabled={isTracking || isLoading || !isPermissionGranted}
       >

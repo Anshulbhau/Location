@@ -321,7 +321,7 @@ export default function App() {
   );
 
   const renderDriving = () => (
-    <View style={styles.drivingContainer}>
+    <ScrollView contentContainerStyle={styles.drivingScrollContent}>
       <View style={styles.modeIndicator}>
         <Text style={styles.modeIndicatorText}>
           MODE: {trackingMode === 'gps' ? '🛰️ REAL GPS' : '🤖 SIMULATION'}
@@ -372,7 +372,7 @@ export default function App() {
       <ControlButtons 
         isTracking={isTracking}
         isLoading={false}
-        isPermissionGranted={permissionGranted}
+        isPermissionGranted={trackingMode === 'simulation' || permissionGranted}
         onStart={toggleTracking}
         onStop={toggleTracking}
       />
@@ -380,7 +380,7 @@ export default function App() {
       <TouchableOpacity style={styles.exitButton} onPress={exitDriving}>
         <Text style={styles.exitButtonText}>END & EXIT TRIP</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 
   return (
@@ -416,7 +416,7 @@ const styles = StyleSheet.create({
   mainButton: { backgroundColor: '#1e40af', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 30, elevation: 4 },
   disabledButton: { backgroundColor: '#94a3b8' },
   mainButtonText: { color: 'white', fontWeight: 'bold', fontSize: 16, letterSpacing: 1 },
-  drivingContainer: { flex: 1, padding: 16 },
+  drivingScrollContent: { flexGrow: 1, padding: 16, paddingBottom: 40 },
   modeIndicator: { backgroundColor: '#e2e8f0', padding: 6, borderRadius: 20, alignSelf: 'center', marginBottom: 10 },
   modeIndicatorText: { fontSize: 10, fontWeight: 'bold', color: '#475569', paddingHorizontal: 10 },
   speedometerContainer: { backgroundColor: 'white', padding: 30, borderRadius: 24, alignItems: 'center', marginTop: 10, elevation: 5 },

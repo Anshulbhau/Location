@@ -40,13 +40,18 @@ export const requestLocationPermission = async () => {
     const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
     if (fgStatus !== 'granted') return false;
 
-    const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
-    if (bgStatus !== 'granted') {
-       console.log('Background permission not granted, app will only track in foreground');
+    try {
+      const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+      if (bgStatus !== 'granted') {
+         console.log('Background permission not granted, app will only track in foreground');
+      }
+    } catch (bgError) {
+      console.log('Error requesting background permission (likely Android 11+ restriction):', bgError);
+      // We still return true because foreground permission is granted
     }
     return true; 
   } catch (error) {
-    console.error('Error requesting permission:', error);
+    console.error('Error requesting foreground permission:', error);
     return false;
   }
 };
