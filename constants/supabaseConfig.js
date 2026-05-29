@@ -128,6 +128,8 @@ export const startTrip = async (vehicleId, routeId, direction) => {
 
     const driverId = vehicleData.driver_id;
 
+    const validDirection = direction === 'backward' ? 'backward' : 'onward';
+
     // 2. Insert trip
     const { data, error } = await supabase
       .from('trips')
@@ -137,7 +139,7 @@ export const startTrip = async (vehicleId, routeId, direction) => {
           route_id: routeId,
           driver_id: driverId,
           status: 'running',
-          direction: direction || 'onward',
+          direction: validDirection,
           start_time: new Date().toISOString()
         }
       ])

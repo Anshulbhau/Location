@@ -162,6 +162,316 @@ If real GPS fails, app uses predefined coordinates:
 // ... and more
 ```
 
+## Hardware Integration (ESP32 GPS Tracker)
+
+In addition to the mobile app tracking, this system supports dedicated hardware-based GPS tracking using an **ESP32** microcontroller coupled with a **GPS module** (e.g., NEO-6M / NEO-M8N).
+
+> [!IMPORTANT]
+> **Complete End-to-End Trip Tracking Workflow:**
+> 1. **Admin Starts Trip:** The administrator initiates/starts the trip via the **Admin Website/Dashboard**.
+> 2. **Hardware Activation:** Once the trip is active, if the **ESP32 GPS Tracker** is powered on and has a valid satellite fix, it continuously updates the vehicle's location.
+> 3. **Real-time User View:** The **User Mobile App** listens to these updates from Supabase and renders the live, moving vehicle on the map in real-time.
+
+---
+
+### ESP32 Arduino Firmware Code
+
+Below is the complete C++ firmware code to be flashed onto your ESP32. It reads serial NMEA data from the GPS, filters the GPS signal for quality, prevents impossible location "jumps", and uploads the coordinates directly to the Supabase Edge Function.
+
+```cpp
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+
+// ======================
+// WiFi Credentials
+// ======================
+const char* ssid = "ENTER-YOUR-SSID";
+const char* password = "ENTER PASSWORD";
+
+// ======================
+// Supabase Edge Function & Vehicle Setup
+// ======================
+const char* serverURL =
+  "https://rpqeavqoidtwfxzmdplb.supabase.co/functions/v1/update-location";
+
+// The vehicle ID is taken directly from your Supabase Database (e.g., vehicles table)
+const char* VEHICLE_ID =
+  "997d05b5-0a0b-4e88-8a99-000354a8763d";
+
+const char* API_SECRET =
+  "gps_safarsetu_x9k2m7p4q1";
+
+// ======================
+// GPS
+// ======================
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1);
+
+// ======================
+// Timing
+// ======================
+unsigned long lastSent = 0;
+const unsigned long INTERVAL = 2000;
+
+// ======================
+// WiFi Reconnect
+// ======================
+unsigned long lastWifiCheck = 0;
+const unsigned long WIFI_CHECK_INTERVAL = 5000;
+
+// ======================
+// Previous Coordinates
+// ======================
+float lastLat = 0;
+float lastLng = 0;
+bool hasPreviousLocation = false;
+
+// ======================
+// Setup
+// ======================
+void setup() {
+
+  Serial.begin(115200);
+
+  // GPS RX, TX
+  gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
+
+  connectWiFi();
+
+  Serial.println("GPS Tracking Started");
+}
+
+// ======================
+// Main Loop
+// ======================
+void loop() {
+
+  // Continuously parse GPS
+  while (gpsSerial.available()) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // Reconnect WiFi if needed
+  if (millis() - lastWifiCheck >= WIFI_CHECK_INTERVAL) {
+
+    lastWifiCheck = millis();
+
+    if (WiFi.status() != WL_CONNECTED) {
+
+      Serial.println("WiFi disconnected. Reconnecting...");
+      connectWiFi();
+    }
+  }
+
+  // Process valid GPS updates
+  if (
+    gps.location.isValid() &&
+    gps.location.isUpdated()
+  ) {
+
+    float lat = gps.location.lat();
+    float lng = gps.location.lng();
+    float speed = gps.speed.kmph();
+    float heading = gps.course.deg();
+
+    int satellites = gps.satellites.value();
+    float hdop = gps.hdop.hdop();
+
+    Serial.println("--------------------------------");
+    Serial.println("Latitude: " + String(lat, 6));
+    Serial.println("Longitude: " + String(lng, 6));
+    Serial.println("Speed: " + String(speed));
+    Serial.println("Heading: " + String(heading));
+    Serial.println("Satellites: " + String(satellites));
+    Serial.println("HDOP: " + String(hdop));
+    Serial.println("Age: " + String(gps.location.age()));
+
+    // ======================
+    // GPS Quality Filtering
+    // ======================
+    bool gpsQualityGood =
+      satellites >= 4 &&
+      hdop > 0 &&
+      hdop < 3 &&
+      gps.location.age() < 3000;
+
+    if (!gpsQualityGood) {
+
+      Serial.println("Poor GPS quality. Skipping upload.");
+      delay(10);
+      return;
+    }
+
+    // ======================
+    // Jump Protection
+    // ======================
+    if (hasPreviousLocation) {
+
+      double distance =
+        TinyGPSPlus::distanceBetween(
+          lastLat,
+          lastLng,
+          lat,
+          lng
+        );
+
+      // Reject impossible jump > 2km
+      if (distance > 2000) {
+
+        Serial.println("GPS jump detected!");
+        Serial.println("Distance: " + String(distance));
+
+        delay(10);
+        return;
+      }
+    }
+
+    // ======================
+    // Send Every 2 sec
+    // ======================
+    if (millis() - lastSent >= INTERVAL) {
+
+      sendLocation(
+        lat,
+        lng,
+        speed,
+        heading
+      );
+
+      lastLat = lat;
+      lastLng = lng;
+      hasPreviousLocation = true;
+
+      lastSent = millis();
+    }
+  }
+
+  delay(10);
+}
+
+// ======================
+// WiFi Connect
+// ======================
+void connectWiFi() {
+
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting to WiFi");
+
+  unsigned long startAttempt = millis();
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - startAttempt < 10000
+  ) {
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+
+    Serial.println("\nWiFi connected!");
+    Serial.println(WiFi.localIP());
+
+  } else {
+
+    Serial.println("\nWiFi connection failed");
+  }
+}
+
+// ======================
+// Send GPS Data
+// ======================
+void sendLocation(
+  float lat,
+  float lng,
+  float speed,
+  float heading
+) {
+
+  if (WiFi.status() != WL_CONNECTED) {
+
+    Serial.println("No WiFi. Upload skipped.");
+    return;
+  }
+
+  HTTPClient http;
+
+  http.begin(serverURL);
+
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-api-secret", API_SECRET);
+
+  // Reduced timeout
+  http.setTimeout(3000);
+
+  // ======================
+  // JSON Payload
+  // ======================
+  String payload = "{";
+
+  payload += "\"vehicle_id\":\"" + String(VEHICLE_ID) + "\",";
+  payload += "\"latitude\":" + String(lat, 6) + ",";
+  payload += "\"longitude\":" + String(lng, 6) + ",";
+  payload += "\"speed\":" + String(speed, 1) + ",";
+  payload += "\"heading\":" + String(heading, 1);
+
+  payload += "}";
+
+  Serial.println("Sending Location...");
+  Serial.println(payload);
+
+  int responseCode = http.POST(payload);
+
+  Serial.println("Response Code: " + String(responseCode));
+
+  if (responseCode > 0) {
+
+    String response = http.getString();
+
+    Serial.println("Response:");
+    Serial.println(response);
+
+  } else {
+
+    Serial.println("HTTP Request Failed");
+  }
+
+  http.end();
+}
+```
+
+---
+
+### Code Explanation & Key Features
+
+This firmware is optimized for battery-operated or vehicle-connected IoT hardware. Below is a breakdown of how the logic operates:
+
+1. **Hardware Serial Setup & GPS Parsing (`setup()` & `loop()`)**:
+   - `gpsSerial.begin(9600, SERIAL_8N1, 16, 17)` configures pin `16` as RX and `17` as TX to listen to raw NMEA sentences from the GPS module.
+   - The `gps.encode()` stream parser processes GPS data in real-time as it arrives.
+2. **Robust WiFi Auto-Reconnect**:
+   - In `loop()`, a background check is executed every 5 seconds (`WIFI_CHECK_INTERVAL = 5000`).
+   - If the connection drops (e.g. vehicle moves temporarily out of cellular/WiFi range), it non-blockingly attempts reconnection without freezing the GPS parsing thread.
+3. **GPS Quality & Signal Filtering**:
+   - Before uploading coordinates, the firmware evaluates whether the location fix is reliable:
+     - **Satellite Count (`satellites >= 4`)**: Ensures enough satellite locks for stable 3D trilateration.
+     - **HDOP (`0 < hdop < 3`)**: Horizontal Dilution of Precision must be low, preventing drift.
+     - **Data Freshness (`gps.location.age() < 3000` ms)**: Ensures coordinates aren't stale buffer remnants.
+4. **GPS Jump Protection**:
+   - To avoid anomalous GPS glitches (where the module temporarily reports coordinates thousands of miles away), the firmware uses `TinyGPSPlus::distanceBetween(lastLat, lastLng, lat, lng)`.
+   - If the distance from the last known good coordinate exceeds **2,000 meters (2 km)** within a 2-second interval, the point is treated as a glitch and rejected.
+5. **Rate-Limited Uploads**:
+   - The device checks `millis() - lastSent >= INTERVAL` before dispatching. This guarantees data uploads occur at most once every **2 seconds** (`INTERVAL = 2000`), protecting bandwidth and preventing database bloat.
+6. **Supabase Secure Communication (`sendLocation`)**:
+   - An HTTP POST request is sent to the Supabase Edge Function endpoint (`update-location`).
+   - A custom security token header `x-api-secret` is passed to authenticate the IoT hardware against the database/API layer.
+7. **Vehicle ID Mapping (`VEHICLE_ID`)**:
+   - The tracking code uses a unique `VEHICLE_ID` UUID. This ID is taken directly from your **Supabase Database** (e.g., from your `vehicles` or `trips` table) to ensure that incoming live coordinates are correctly mapped to the appropriate vehicle record in the system.
+
 ## Database Schema
 
 ```

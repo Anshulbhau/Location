@@ -89,6 +89,41 @@ export default function App() {
       if (!vRes.success || !rRes.success) {
         setErrorMessage('Failed to fetch initial data. Check connection.');
       }
+
+      // Restore active trip after app reopen (Part 5)
+      const tripId = await AsyncStorage.getItem('active_trip_id');
+
+      if (tripId) {
+        const savedVehicle =
+          await AsyncStorage.getItem('active_vehicle');
+
+        const savedRoute =
+          await AsyncStorage.getItem('active_route');
+
+        const savedDirection =
+          await AsyncStorage.getItem('active_direction');
+
+        const trackingActive =
+          await AsyncStorage.getItem('tracking_active');
+
+        if (savedVehicle)
+          setSelectedVehicle(JSON.parse(savedVehicle));
+
+        if (savedRoute)
+          setSelectedRoute(JSON.parse(savedRoute));
+
+        if (savedDirection)
+          setDirection(savedDirection);
+
+        setCurrentTripId(tripId);
+
+        setAppMode('driving');
+
+        if (trackingActive === 'true') {
+          setIsTracking(true);
+          await startRealTimeTracking(UPDATE_INTERVAL);
+        }
+      }
     } catch (e) {
       console.error(e);
       setErrorMessage('Critical error during initialization.');
@@ -107,15 +142,26 @@ export default function App() {
 
     setIsLoading(true);
     try {
+      const validDirection = direction === 'backward' ? 'backward' : 'onward';
       // 1. Create trip in database
-      const tripRes = await startTrip(selectedVehicle.id, selectedRoute.id, direction);
+      const tripRes = await startTrip(selectedVehicle.id, selectedRoute.id, validDirection);
       if (!tripRes.success) {
         throw new Error('Failed to create trip in database.');
       }
-      setCurrentTripId(tripRes.data.id);
+      const tripId = tripRes.data.id;
+      setCurrentTripId(tripId);
       
       // Save vehicle ID so background task knows which vehicle is moving
       await AsyncStorage.setItem('tracking_vehicle_id', selectedVehicle.id.toString());
+
+      // Save active trip state (Part 4)
+      await AsyncStorage.multiSet([
+        ['active_trip_id', tripId],
+        ['active_vehicle', JSON.stringify(selectedVehicle)],
+        ['active_route', JSON.stringify(selectedRoute)],
+        ['active_direction', validDirection],
+        ['tracking_active', 'true']
+      ]);
 
       setAppMode('driving');
     } catch (e) {
@@ -181,6 +227,7 @@ export default function App() {
   const toggleTracking = async () => {
     if (isTracking) {
       stopAllTracking();
+      await AsyncStorage.setItem('tracking_active', 'false');
     } else {
       const hasPerm = await requestLocationPermission();
       if (!hasPerm) {
@@ -190,6 +237,7 @@ export default function App() {
       setErrorMessage('');
       setIsTracking(true);
       await startRealTimeTracking(UPDATE_INTERVAL);
+      await AsyncStorage.setItem('tracking_active', 'true');
     }
   };
 
@@ -202,6 +250,15 @@ export default function App() {
     }
     
     await AsyncStorage.removeItem('tracking_vehicle_id');
+
+    // Cleanup on trip end (Part 6)
+    await AsyncStorage.multiRemove([
+      'active_trip_id',
+      'active_vehicle',
+      'active_route',
+      'active_direction',
+      'tracking_active'
+    ]);
 
     setAppMode('setup');
     setTotalUpdates(0);
@@ -248,12 +305,12 @@ export default function App() {
         <View style={styles.toggleRow}>
           <Text style={[styles.modeLabel, direction === 'onward' && styles.activeMode]}>ONWARD</Text>
           <Switch
-            value={direction === 'return'}
-            onValueChange={(val) => setDirection(val ? 'return' : 'onward')}
+            value={direction === 'backward'}
+            onValueChange={(val) => setDirection(val ? 'backward' : 'onward')}
             trackColor={{ false: '#cbd5e1', true: '#1e40af' }}
             thumbColor="white"
           />
-          <Text style={[styles.modeLabel, direction === 'return' && styles.activeMode]}>RETURN</Text>
+          <Text style={[styles.modeLabel, direction === 'backward' && styles.activeMode]}>BACKWARD</Text>
         </View>
         <Text style={styles.modeInfo}>
           {direction === 'onward' 
